@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { usageAPI } from '../utils/api';
 import { 
@@ -38,8 +38,14 @@ export default function Dashboard() {
   const [activeTab, setActiveTab] = useState('overview');
   const [todayUsage, setTodayUsage] = useState([]);
   const [weeklyData, setWeeklyData] = useState([]);
+  const [productivityData, setProductivityData] = useState({});
+  const [focusAnalysisData, setFocusAnalysisData] = useState([]);
+  const [challenges, setChallenges] = useState([]);
   const [loading, setLoading] = useState(true);
   const [weeklyLoading, setWeeklyLoading] = useState(true);
+  const [productivityLoading, setProductivityLoading] = useState(true);
+  const [focusAnalysisLoading, setFocusAnalysisLoading] = useState(true);
+  const [challengesLoading, setChallengesLoading] = useState(true);
   const [error, setError] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -77,54 +83,65 @@ export default function Dashboard() {
     { day: "Sun", screenTime: 3.8, focus: 92, apps: 6 }
   ];
 
-  // Calculate category data dynamically from today's usage
-  const calculateCategoryData = () => {
-    if (todayUsage.length === 0) {
-      return [
-        { name: "Work", value: 45, color: "#3B82F6" },
-        { name: "Entertainment", value: 25, color: "#EF4444" },
-        { name: "Social", value: 15, color: "#10B981" },
-        { name: "Productivity", value: 10, color: "#F59E0B" },
-        { name: "Music", color: "#8B5CF6", value: 5 }
-      ];
-    }
+  // Fallback focus analysis data
+  const fallbackFocusAnalysisData = [
+    { day: "Mon", screenTime: 7.2, focus: 82, apps: 12 },
+    { day: "Tue", screenTime: 6.8, focus: 75, apps: 15 },
+    { day: "Wed", screenTime: 8.1, focus: 68, apps: 18 },
+    { day: "Thu", screenTime: 5.9, focus: 88, apps: 10 },
+    { day: "Fri", screenTime: 7.5, focus: 72, apps: 14 },
+    { day: "Sat", screenTime: 4.2, focus: 95, apps: 8 },
+    { day: "Sun", screenTime: 3.8, focus: 92, apps: 6 }
+  ];
 
-    const categoryTotals = {};
-    const totalDuration = todayUsage.reduce((acc, app) => acc + app.duration, 0);
-
-    todayUsage.forEach(app => {
-      if (categoryTotals[app.category]) {
-        categoryTotals[app.category] += app.duration;
-      } else {
-        categoryTotals[app.category] = app.duration;
-      }
-    });
-
-    const colors = {
-      "Work": "#3B82F6",
-      "Entertainment": "#EF4444",
-      "Social": "#10B981",
-      "Productivity": "#F59E0B",
-      "Music": "#8B5CF6",
-      "Other": "#6B7280"
-    };
-
-    return Object.entries(categoryTotals)
-      .map(([category, duration]) => ({
-        name: category,
-        value: Math.round((duration / totalDuration) * 100),
-        color: colors[category] || "#6B7280"
-      }))
-      .sort((a, b) => b.value - a.value);
-  };
-
-  const categoryData = calculateCategoryData();
-
-  const challenges = [
+  // Fallback challenges data
+  const fallbackChallenges = [
     "Use YouTube for only 15 minutes today",
     "Take a 10-minute break every hour",
     "Close all social apps after 9 PM"
   ];
+
+  // Calculate productivity data from today's usage and productivity analysis
+  const calculateProductivityData = () => {
+    if (todayUsage.length === 0 || Object.keys(productivityData).length === 0) {
+      return [
+        { name: "Productive", value: 0, color: "#10B981" },
+        { name: "Non-Productive", value: 0, color: "#EF4444" }
+      ];
+    }
+
+    let productiveTime = 0;
+    let nonProductiveTime = 0;
+
+    todayUsage.forEach(app => {
+      const productivity = productivityData[app.app];
+      if (productivity === "productive") {
+        productiveTime += app.duration;
+      } else if (productivity === "non-productive") {
+        nonProductiveTime += app.duration;
+      } else {
+        // Default to non-productive for unknown apps
+        nonProductiveTime += app.duration;
+      }
+    });
+
+    const totalTime = productiveTime + nonProductiveTime;
+    
+    return [
+      { 
+        name: "Productive", 
+        value: totalTime > 0 ? Math.round((productiveTime / totalTime) * 100) : 0,
+        color: "#10B981" 
+      },
+      { 
+        name: "Non-Productive", 
+        value: totalTime > 0 ? Math.round((nonProductiveTime / totalTime) * 100) : 0,
+        color: "#EF4444" 
+      }
+    ];
+  };
+
+  const productivityCategoryData = calculateProductivityData();
 
   const insights = [
     {
@@ -184,7 +201,7 @@ export default function Dashboard() {
   };
 
   // Function to fetch today's usage data
-  const fetchTodayUsage = async (isRefresh = false) => {
+  const fetchTodayUsage = useCallback(async (isRefresh = false) => {
     try {
       if (isRefresh) {
         setRefreshing(true);
@@ -229,10 +246,10 @@ export default function Dashboard() {
       setLoading(false);
       setRefreshing(false);
     }
-  };
+  }, [user]);
 
   // Function to fetch weekly usage data
-  const fetchWeeklyData = async () => {
+  const fetchWeeklyData = useCallback(async () => {
     try {
       setWeeklyLoading(true);
       console.log('Fetching weekly usage data from API...');
@@ -298,12 +315,153 @@ export default function Dashboard() {
     } finally {
       setWeeklyLoading(false);
     }
-  };
+  }, [user]);
+
+  // Function to fetch productivity data
+  const fetchProductivityData = useCallback(async () => {
+    try {
+      setProductivityLoading(true);
+      console.log('Fetching productivity data from Gemini API...');
+      
+      const response = await usageAPI.getProductivityAnalysis();
+      console.log('Productivity API Response:', response.data);
+
+      if (response.data.message === 'Success' && response.data.productivity) {
+        console.log('Productivity data received:', response.data.productivity);
+        setProductivityData(response.data.productivity);
+      } else {
+        console.log('No productivity data received');
+        setProductivityData({});
+      }
+    } catch (err) {
+      console.error('Error fetching productivity data:', err);
+      console.error('Productivity error details:', {
+        status: err.response?.status,
+        statusText: err.response?.statusText,
+        data: err.response?.data,
+        message: err.message
+      });
+      
+      if (err.response?.status === 401 || err.message.includes('authentication')) {
+        console.error('Authentication failed for productivity data');
+      } else if (err.response?.status === 404) {
+        console.log('No productivity data found');
+        setProductivityData({});
+      } else {
+        console.log('Using empty productivity data due to error');
+        setProductivityData({});
+      }
+    } finally {
+      setProductivityLoading(false);
+    }
+  }, [user]);
+
+  // Function to fetch focus analysis data
+  const fetchFocusAnalysisData = useCallback(async () => {
+    try {
+      setFocusAnalysisLoading(true);
+      console.log('Fetching focus analysis data from Gemini API...');
+      
+      const response = await usageAPI.getWeeklyFocusAnalysis();
+      console.log('Focus Analysis API Response:', response.data);
+
+      if (response.data.message === 'Success' && response.data.focusAnalysis && response.data.focusAnalysis.length > 0) {
+        console.log('Focus analysis data received:', response.data.focusAnalysis);
+        
+        // Transform the data to match chart format with day names
+        const transformedData = response.data.focusAnalysis.map((dayData, index) => {
+          const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+          const date = new Date(dayData.date);
+          const dayName = dayNames[date.getDay()];
+          
+          return {
+            day: dayName,
+            screenTime: dayData.screenTime,
+            focus: dayData.focus,
+            apps: dayData.apps,
+            date: dayData.date
+          };
+        });
+        
+        console.log('Transformed focus analysis data:', transformedData);
+        setFocusAnalysisData(transformedData);
+      } else {
+        console.log('No valid focus analysis data received, using fallback');
+        console.log('Response data:', response.data);
+        setFocusAnalysisData(fallbackFocusAnalysisData);
+      }
+    } catch (err) {
+      console.error('Error fetching focus analysis data:', err);
+      console.error('Focus analysis error details:', {
+        status: err.response?.status,
+        statusText: err.response?.statusText,
+        data: err.response?.data,
+        message: err.message
+      });
+      
+      if (err.response?.status === 401 || err.message.includes('authentication')) {
+        console.error('Authentication failed for focus analysis data');
+        setFocusAnalysisData(fallbackFocusAnalysisData);
+      } else if (err.response?.status === 404) {
+        console.log('No focus analysis data found, using fallback');
+        setFocusAnalysisData(fallbackFocusAnalysisData);
+      } else {
+        console.log('Using fallback focus analysis data due to error');
+        setFocusAnalysisData(fallbackFocusAnalysisData);
+      }
+    } finally {
+      setFocusAnalysisLoading(false);
+    }
+  }, [user]);
+
+  // Function to fetch challenges data
+  const fetchChallenges = useCallback(async () => {
+    try {
+      setChallengesLoading(true);
+      console.log('Fetching challenges from Gemini API...');
+      
+      const response = await usageAPI.getGeminiInsights();
+      console.log('Challenges API Response:', response.data);
+
+      if (response.data.message === 'Success' && response.data.challenges && response.data.challenges.length > 0) {
+        console.log('Challenges received:', response.data.challenges);
+        setChallenges(response.data.challenges);
+      } else {
+        console.log('No challenges received, using fallback');
+        console.log('Response data:', response.data);
+        setChallenges(fallbackChallenges);
+      }
+    } catch (err) {
+      console.error('Error fetching challenges:', err);
+      console.error('Challenges error details:', {
+        status: err.response?.status,
+        statusText: err.response?.statusText,
+        data: err.response?.data,
+        message: err.message
+      });
+      
+      if (err.response?.status === 401 || err.message.includes('authentication')) {
+        console.error('Authentication failed for challenges');
+        setChallenges(fallbackChallenges);
+      } else if (err.response?.status === 404) {
+        console.log('No challenges found, using fallback');
+        setChallenges(fallbackChallenges);
+      } else {
+        console.log('Using fallback challenges due to error');
+        setChallenges(fallbackChallenges);
+      }
+    } finally {
+      setChallengesLoading(false);
+    }
+  }, [user]);
 
   // Function to refresh data
   const handleRefresh = () => {
     fetchTodayUsage(true);
     fetchWeeklyData();
+    fetchProductivityData();
+    fetchFocusAnalysisData();
+    fetchChallenges();
   };
 
   useEffect(() => {
@@ -315,6 +473,9 @@ export default function Dashboard() {
     console.log('Dashboard mounted, fetching usage data...');
     fetchTodayUsage();
     fetchWeeklyData();
+    fetchProductivityData();
+    fetchFocusAnalysisData();
+    fetchChallenges();
   }, [user]); // Re-fetch when user changes
 
   const formatTime = (seconds) => {
@@ -459,7 +620,7 @@ export default function Dashboard() {
                           <div className="ml-3">
                             <div className="text-white font-medium">{app.app}</div>
                             <div className="text-gray-400 text-sm">{app.category}</div>
-                          </div>
+                            </div>
                         </div>
                         <div className="text-white font-semibold">
                           {formatTime(app.duration)}
@@ -527,48 +688,62 @@ export default function Dashboard() {
 
         {activeTab === 'analytics' && (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-            {/* App Categories */}
+            {/* Productivity Analysis */}
+            
             <div className="bg-gray-800/80 backdrop-blur-md rounded-2xl p-6 border border-gray-700">
               <h2 className="text-xl font-bold text-white mb-6 flex items-center">
                 <Pie className="w-5 h-5 mr-2" />
-                App Categories
+                Productivity Analysis
+                {productivityLoading && (
+                  <div className="ml-2 w-4 h-4 border-2 border-purple-500/30 border-t-purple-500 rounded-full animate-spin"></div>
+                )}
               </h2>
-              <ResponsiveContainer width="100%" height={300}>
-                <PieChart>
-                  <Pie
-                    data={categoryData}
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={60}
-                    outerRadius={100}
-                    paddingAngle={5}
-                    dataKey="value"
-                  >
-                    {categoryData.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={entry.color} />
+              
+              {productivityLoading ? (
+                <div className="flex items-center justify-center py-8">
+                  <div className="w-8 h-8 border-2 border-purple-500/30 border-t-purple-500 rounded-full animate-spin"></div>
+                  <span className="ml-3 text-gray-300">Analyzing productivity...</span>
+                </div>
+              ) : (
+                <>
+                  <ResponsiveContainer width="100%" height={300}>
+                    <PieChart>
+                      <Pie
+                        data={productivityCategoryData}
+                        cx="50%"
+                        cy="50%"
+                        innerRadius={60}
+                        outerRadius={100}
+                        paddingAngle={5}
+                        dataKey="value"
+                      >
+                        {productivityCategoryData.map((entry, index) => (
+                          <Cell key={`cell-${index}`} fill={entry.color} />
+                        ))}
+                      </Pie>
+                      <Tooltip 
+                        contentStyle={{ 
+                          backgroundColor: 'rgba(0,0,0,0.8)', 
+                          border: 'none', 
+                          borderRadius: '12px',
+                          color: 'white'
+                        }} 
+                      />
+                    </PieChart>
+                  </ResponsiveContainer>
+                  <div className="mt-4 grid grid-cols-2 gap-2">
+                    {productivityCategoryData.map((category, index) => (
+                      <div key={index} className="flex items-center">
+                        <div 
+                          className="w-3 h-3 rounded-full mr-2" 
+                          style={{ backgroundColor: category.color }}
+                        ></div>
+                        <span className="text-white text-sm">{category.name}</span>
+                      </div>
                     ))}
-                  </Pie>
-                  <Tooltip 
-                    contentStyle={{ 
-                      backgroundColor: 'rgba(0,0,0,0.8)', 
-                      border: 'none', 
-                      borderRadius: '12px',
-                      color: 'white'
-                    }} 
-                  />
-                </PieChart>
-              </ResponsiveContainer>
-              <div className="mt-4 grid grid-cols-2 gap-2">
-                {categoryData.map((category, index) => (
-                  <div key={index} className="flex items-center">
-                    <div 
-                      className="w-3 h-3 rounded-full mr-2" 
-                      style={{ backgroundColor: category.color }}
-                    ></div>
-                    <span className="text-white text-sm">{category.name}</span>
                   </div>
-                ))}
-              </div>
+                </>
+              )}
             </div>
 
             {/* Focus vs Screen Time */}
@@ -576,33 +751,36 @@ export default function Dashboard() {
               <h2 className="text-xl font-bold text-white mb-6 flex items-center">
                 <Activity className="w-5 h-5 mr-2" />
                 Focus vs Screen Time
-                {weeklyLoading && (
+                {focusAnalysisLoading && (
                   <div className="ml-2 w-4 h-4 border-2 border-purple-500/30 border-t-purple-500 rounded-full animate-spin"></div>
                 )}
               </h2>
               
-              {weeklyLoading ? (
+              {focusAnalysisLoading ? (
                 <div className="flex items-center justify-center py-8">
                   <div className="w-8 h-8 border-2 border-purple-500/30 border-t-purple-500 rounded-full animate-spin"></div>
-                  <span className="ml-3 text-gray-300">Loading focus data...</span>
+                  <span className="ml-3 text-gray-300">Analyzing focus patterns...</span>
                 </div>
               ) : (
-                <ResponsiveContainer width="100%" height={300}>
-                  <BarChart data={weeklyData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
-                    <XAxis dataKey="day" axisLine={false} tickLine={false} tick={{fill: 'white'}} />
-                    <YAxis axisLine={false} tickLine={false} tick={{fill: 'white'}} />
-                    <Tooltip 
-                      contentStyle={{ 
-                        backgroundColor: 'rgba(0,0,0,0.8)', 
-                        border: 'none', 
-                        borderRadius: '12px',
-                        color: 'white'
-                      }} 
-                    />
-                    <Bar dataKey="focus" fill="#10B981" radius={[4, 4, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
+                <>
+                  {console.log('Focus Analysis Data for Chart:', focusAnalysisData)}
+                  <ResponsiveContainer width="100%" height={300}>
+                    <BarChart data={focusAnalysisData}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
+                      <XAxis dataKey="day" axisLine={false} tickLine={false} tick={{fill: 'white'}} />
+                      <YAxis axisLine={false} tickLine={false} tick={{fill: 'white'}} />
+                      <Tooltip 
+                        contentStyle={{ 
+                          backgroundColor: 'rgba(0,0,0,0.8)', 
+                          border: 'none', 
+                          borderRadius: '12px',
+                          color: 'white'
+                        }} 
+                      />
+                      <Bar dataKey="focus" fill="#10B981" radius={[4, 4, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </>
               )}
             </div>
           </div>
@@ -615,19 +793,30 @@ export default function Dashboard() {
               <h2 className="text-xl font-bold text-white mb-6 flex items-center">
                 <Brain className="w-5 h-5 mr-2" />
                 Personalized Challenges
+                {challengesLoading && (
+                  <div className="ml-2 w-4 h-4 border-2 border-purple-500/30 border-t-purple-500 rounded-full animate-spin"></div>
+                )}
               </h2>
-              <div className="space-y-4">
-                {challenges.map((challenge, index) => (
-                  <div key={index} className="p-4 bg-gray-700/50 rounded-xl border border-gray-600">
-                    <div className="flex items-start">
-                      <div className="w-8 h-8 bg-gradient-to-r from-purple-500 to-pink-500 rounded-full flex items-center justify-center text-white font-bold text-sm mr-3">
-                        {index + 1}
+              
+              {challengesLoading ? (
+                <div className="flex items-center justify-center py-8">
+                  <div className="w-8 h-8 border-2 border-purple-500/30 border-t-purple-500 rounded-full animate-spin"></div>
+                  <span className="ml-3 text-gray-300">Generating personalized challenges...</span>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {challenges.map((challenge, index) => (
+                    <div key={index} className="p-4 bg-gray-700/50 rounded-xl border border-gray-600">
+                      <div className="flex items-start">
+                        <div className="w-8 h-8 bg-gradient-to-r from-purple-500 to-pink-500 rounded-full flex items-center justify-center text-white font-bold text-sm mr-3">
+                          {index + 1}
+                        </div>
+                        <p className="text-white">{challenge}</p>
                       </div>
-                      <p className="text-white">{challenge}</p>
                     </div>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             {/* Well-being Tips */}
@@ -657,10 +846,10 @@ export default function Dashboard() {
                     <h3 className="text-white font-semibold">Better Sleep</h3>
                   </div>
                   <p className="text-gray-300 text-sm">Avoid screens 1 hour before bedtime for better sleep quality.</p>
+                        </div>
                 </div>
-              </div>
             </div>
-          </div>
+        </div>
         )}
       </div>
     </div>

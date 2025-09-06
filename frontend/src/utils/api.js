@@ -58,6 +58,15 @@ export const usageAPI = {
   }),
   getWeeklyDurations: () => axios.get(`${BASE_URL}/getdurations`, {
     headers: { token: localStorage.getItem("token") }
+  }),
+  getGeminiInsights: () => axios.get(`${BASE_URL}/gemini-hi`, {
+    headers: { token: localStorage.getItem("token") }
+  }),
+  getProductivityAnalysis: () => axios.get(`${BASE_URL}/gemini-productivity`, {
+    headers: { token: localStorage.getItem("token") }
+  }),
+  getWeeklyFocusAnalysis: () => axios.get(`${BASE_URL}/gemini-weekly-focus`, {
+    headers: { token: localStorage.getItem("token") }
   })
 };
 
