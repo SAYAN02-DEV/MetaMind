@@ -1,4 +1,6 @@
 import { useState, useEffect } from 'react';
+import { useAuth } from '../contexts/AuthContext';
+import { usageAPI } from '../utils/api';
 import { 
   Smartphone, 
   Clock, 
@@ -11,7 +13,8 @@ import {
   Eye,
   Heart,
   Moon,
-  Sun
+  Sun,
+  RefreshCw
 } from 'lucide-react';
 import { 
   LineChart, 
@@ -33,19 +36,28 @@ import {
 export default function Dashboard() {
   const [currentTime, setCurrentTime] = useState(new Date());
   const [activeTab, setActiveTab] = useState('overview');
+  const [todayUsage, setTodayUsage] = useState([]);
+  const [weeklyData, setWeeklyData] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [weeklyLoading, setWeeklyLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [refreshing, setRefreshing] = useState(false);
 
-  // Hardcoded data based on backend structure
+  const { user } = useAuth();
+
+  // User data from auth context
   const userData = {
-    name: "Alex Johnson",
+    name: user?.name || "User",
     age: 25,
-    occupation: "Software Developer",
+    occupation: user?.occupation || "Software Developer",
     gender: "Male",
     totalScreenTime: 6.5, // hours
     focusScore: 78,
     wellBeingScore: 85
   };
 
-  const todayUsage = [
+  // Fallback data for when no real data is available
+  const fallbackUsage = [
     { app: "Chrome", duration: 7200, category: "Productivity" },
     { app: "YouTube", duration: 3600, category: "Entertainment" },
     { app: "WhatsApp", duration: 1800, category: "Social" },
@@ -54,7 +66,8 @@ export default function Dashboard() {
     { app: "Instagram", duration: 1200, category: "Social" }
   ];
 
-  const weeklyData = [
+  // Fallback weekly data
+  const fallbackWeeklyData = [
     { day: "Mon", screenTime: 7.2, focus: 82, apps: 12 },
     { day: "Tue", screenTime: 6.8, focus: 75, apps: 15 },
     { day: "Wed", screenTime: 8.1, focus: 68, apps: 18 },
@@ -64,13 +77,48 @@ export default function Dashboard() {
     { day: "Sun", screenTime: 3.8, focus: 92, apps: 6 }
   ];
 
-  const categoryData = [
-    { name: "Work", value: 45, color: "#3B82F6" },
-    { name: "Entertainment", value: 25, color: "#EF4444" },
-    { name: "Social", value: 15, color: "#10B981" },
-    { name: "Productivity", value: 10, color: "#F59E0B" },
-    { name: "Music", color: "#8B5CF6", value: 5 }
-  ];
+  // Calculate category data dynamically from today's usage
+  const calculateCategoryData = () => {
+    if (todayUsage.length === 0) {
+      return [
+        { name: "Work", value: 45, color: "#3B82F6" },
+        { name: "Entertainment", value: 25, color: "#EF4444" },
+        { name: "Social", value: 15, color: "#10B981" },
+        { name: "Productivity", value: 10, color: "#F59E0B" },
+        { name: "Music", color: "#8B5CF6", value: 5 }
+      ];
+    }
+
+    const categoryTotals = {};
+    const totalDuration = todayUsage.reduce((acc, app) => acc + app.duration, 0);
+
+    todayUsage.forEach(app => {
+      if (categoryTotals[app.category]) {
+        categoryTotals[app.category] += app.duration;
+      } else {
+        categoryTotals[app.category] = app.duration;
+      }
+    });
+
+    const colors = {
+      "Work": "#3B82F6",
+      "Entertainment": "#EF4444",
+      "Social": "#10B981",
+      "Productivity": "#F59E0B",
+      "Music": "#8B5CF6",
+      "Other": "#6B7280"
+    };
+
+    return Object.entries(categoryTotals)
+      .map(([category, duration]) => ({
+        name: category,
+        value: Math.round((duration / totalDuration) * 100),
+        color: colors[category] || "#6B7280"
+      }))
+      .sort((a, b) => b.value - a.value);
+  };
+
+  const categoryData = calculateCategoryData();
 
   const challenges = [
     "Use YouTube for only 15 minutes today",
@@ -109,10 +157,165 @@ export default function Dashboard() {
     }
   ];
 
+  // Function to categorize apps
+  const categorizeApp = (appName) => {
+    const appCategories = {
+      'Chrome': 'Productivity',
+      'Firefox': 'Productivity',
+      'Safari': 'Productivity',
+      'Edge': 'Productivity',
+      'YouTube': 'Entertainment',
+      'Netflix': 'Entertainment',
+      'Spotify': 'Music',
+      'Apple Music': 'Music',
+      'WhatsApp': 'Social',
+      'Instagram': 'Social',
+      'Facebook': 'Social',
+      'Twitter': 'Social',
+      'VS Code': 'Work',
+      'IntelliJ': 'Work',
+      'Xcode': 'Work',
+      'Android Studio': 'Work',
+      'Slack': 'Work',
+      'Discord': 'Social',
+      'Telegram': 'Social'
+    };
+    return appCategories[appName] || 'Other';
+  };
+
+  // Function to fetch today's usage data
+  const fetchTodayUsage = async (isRefresh = false) => {
+    try {
+      if (isRefresh) {
+        setRefreshing(true);
+      } else {
+        setLoading(true);
+      }
+      setError(null);
+
+      console.log('Fetching usage data from API...');
+      const response = await usageAPI.getCurrentUsage();
+      console.log('API Response:', response.data);
+
+      if (response.data.message === 'Success' && response.data.usage) {
+        // Transform the data to include categories
+        const usageWithCategories = response.data.usage.map(item => ({
+          app: item.app,
+          duration: item.duration,
+          category: categorizeApp(item.app)
+        }));
+        setTodayUsage(usageWithCategories);
+      } else {
+        // If no data found, use fallback data
+        setTodayUsage(fallbackUsage);
+      }
+    } catch (err) {
+      console.error('Error fetching usage data:', err);
+      
+      // Handle authentication errors
+      if (err.response?.status === 401 || err.message.includes('authentication')) {
+        setError('Authentication failed. Please login again.');
+        // Clear invalid token and redirect to login
+        localStorage.removeItem('token');
+        setTimeout(() => {
+          window.location.href = '/';
+        }, 2000);
+      } else {
+        setError(err.response?.data?.message || 'Failed to fetch usage data');
+        // Use fallback data on other errors
+        setTodayUsage(fallbackUsage);
+      }
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  };
+
+  // Function to fetch weekly usage data
+  const fetchWeeklyData = async () => {
+    try {
+      setWeeklyLoading(true);
+      console.log('Fetching weekly usage data from API...');
+      
+      const response = await usageAPI.getWeeklyDurations();
+      console.log('Weekly API Response:', response.data);
+
+      if (response.data.message === 'Success' && response.data.durations) {
+        // Transform the data to match chart format
+        const transformedData = response.data.durations.map((dayData, index) => {
+          const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+          const date = new Date(dayData.date);
+          const dayName = dayNames[date.getDay()];
+          
+          // Calculate total screen time for the day
+          const totalDuration = Object.values(dayData.durations).reduce((sum, duration) => sum + duration, 0);
+          const screenTimeHours = totalDuration / 3600; // Convert seconds to hours
+          
+          // Calculate focus score (mock calculation based on work apps)
+          const workApps = ['VS Code', 'IntelliJ', 'Xcode', 'Android Studio', 'Slack'];
+          const workDuration = Object.entries(dayData.durations)
+            .filter(([app]) => workApps.includes(app))
+            .reduce((sum, [, duration]) => sum + duration, 0);
+          const focusScore = totalDuration > 0 ? Math.round((workDuration / totalDuration) * 100) : 0;
+          
+          // Count unique apps
+          const appCount = Object.keys(dayData.durations).length;
+          
+          return {
+            day: dayName,
+            screenTime: Math.round(screenTimeHours * 10) / 10, // Round to 1 decimal
+            focus: focusScore,
+            apps: appCount,
+            date: dayData.date,
+            durations: dayData.durations
+          };
+        });
+        
+        console.log('Transformed weekly data:', transformedData);
+        setWeeklyData(transformedData);
+      } else {
+        console.log('Using fallback weekly data');
+        setWeeklyData(fallbackWeeklyData);
+      }
+    } catch (err) {
+      console.error('Error fetching weekly data:', err);
+      console.error('Weekly error details:', {
+        status: err.response?.status,
+        statusText: err.response?.statusText,
+        data: err.response?.data,
+        message: err.message
+      });
+      
+      if (err.response?.status === 401 || err.message.includes('authentication')) {
+        console.error('Authentication failed for weekly data');
+      } else if (err.response?.status === 404) {
+        console.log('No weekly data found, using fallback');
+        setWeeklyData(fallbackWeeklyData);
+      } else {
+        console.log('Using fallback weekly data due to error');
+        setWeeklyData(fallbackWeeklyData);
+      }
+    } finally {
+      setWeeklyLoading(false);
+    }
+  };
+
+  // Function to refresh data
+  const handleRefresh = () => {
+    fetchTodayUsage(true);
+    fetchWeeklyData();
+  };
+
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
     return () => clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    console.log('Dashboard mounted, fetching usage data...');
+    fetchTodayUsage();
+    fetchWeeklyData();
+  }, [user]); // Re-fetch when user changes
 
   const formatTime = (seconds) => {
     const hours = Math.floor(seconds / 3600);
@@ -206,28 +409,72 @@ export default function Dashboard() {
                   <Smartphone className="w-5 h-5 mr-2" />
                   Today's Usage
                 </h2>
-                <div className="text-2xl font-bold text-white">
-                  {formatTime(todayUsage.reduce((acc, app) => acc + app.duration, 0))}
+                <div className="flex items-center space-x-3">
+                  <button
+                    onClick={handleRefresh}
+                    disabled={refreshing}
+                    className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-all duration-200 disabled:opacity-50"
+                    title="Refresh data"
+                  >
+                    <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
+                  </button>
+                  <button
+                    onClick={() => {
+                      console.log('Manual API test - calling fetchTodayUsage...');
+                      fetchTodayUsage(true);
+                    }}
+                    className="px-3 py-1 text-xs bg-green-600 hover:bg-green-700 text-white rounded transition-all duration-200"
+                    title="Test API call"
+                  >
+                    Test API
+                  </button>
+                  <div className="text-2xl font-bold text-white">
+                    {formatTime(todayUsage.reduce((acc, app) => acc + app.duration, 0))}
+                  </div>
                 </div>
               </div>
-              <div className="space-y-3">
-                {todayUsage.map((app, index) => (
-                  <div key={index} className="flex items-center justify-between p-3 bg-gray-700/50 rounded-xl">
-                    <div className="flex items-center">
-                      <div className="w-10 h-10 bg-gradient-to-r from-blue-500 to-purple-500 rounded-lg flex items-center justify-center text-white font-bold">
-                        {app.app.charAt(0)}
+
+              {/* Error Message */}
+              {error && (
+                <div className="mb-4 p-3 bg-red-500/10 border border-red-500/20 rounded-lg">
+                  <p className="text-red-400 text-sm">{error}</p>
+                </div>
+              )}
+
+              {/* Loading State */}
+              {loading ? (
+                <div className="flex items-center justify-center py-8">
+                  <div className="w-8 h-8 border-2 border-purple-500/30 border-t-purple-500 rounded-full animate-spin"></div>
+                  <span className="ml-3 text-gray-300">Loading usage data...</span>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {todayUsage.length > 0 ? (
+                    todayUsage.map((app, index) => (
+                      <div key={index} className="flex items-center justify-between p-3 bg-gray-700/50 rounded-xl">
+                        <div className="flex items-center">
+                          <div className="w-10 h-10 bg-gradient-to-r from-blue-500 to-purple-500 rounded-lg flex items-center justify-center text-white font-bold">
+                            {app.app.charAt(0)}
+                          </div>
+                          <div className="ml-3">
+                            <div className="text-white font-medium">{app.app}</div>
+                            <div className="text-gray-400 text-sm">{app.category}</div>
+                          </div>
+                        </div>
+                        <div className="text-white font-semibold">
+                          {formatTime(app.duration)}
+                        </div>
                       </div>
-                      <div className="ml-3">
-                        <div className="text-white font-medium">{app.app}</div>
-                        <div className="text-gray-400 text-sm">{app.category}</div>
-                      </div>
+                    ))
+                  ) : (
+                    <div className="text-center py-8">
+                      <Smartphone className="w-12 h-12 text-gray-500 mx-auto mb-3" />
+                      <p className="text-gray-400">No usage data available for today</p>
+                      <p className="text-gray-500 text-sm mt-1">Start using your device to see usage statistics</p>
                     </div>
-                    <div className="text-white font-semibold">
-                      {formatTime(app.duration)}
-                    </div>
-                  </div>
-                ))}
-              </div>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Weekly Trend */}
@@ -235,34 +482,45 @@ export default function Dashboard() {
               <h2 className="text-xl font-bold text-white mb-6 flex items-center">
                 <Calendar className="w-5 h-5 mr-2" />
                 Weekly Trend
+                {weeklyLoading && (
+                  <div className="ml-2 w-4 h-4 border-2 border-purple-500/30 border-t-purple-500 rounded-full animate-spin"></div>
+                )}
               </h2>
-              <ResponsiveContainer width="100%" height={300}>
-                <AreaChart data={weeklyData}>
-                  <defs>
-                    <linearGradient id="colorScreenTime" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#3B82F6" stopOpacity={0.8}/>
-                      <stop offset="95%" stopColor="#3B82F6" stopOpacity={0.1}/>
-                    </linearGradient>
-                  </defs>
-                  <XAxis dataKey="day" axisLine={false} tickLine={false} tick={{fill: 'white'}} />
-                  <YAxis axisLine={false} tickLine={false} tick={{fill: 'white'}} />
-                  <Tooltip 
-                    contentStyle={{ 
-                      backgroundColor: 'rgba(0,0,0,0.8)', 
-                      border: 'none', 
-                      borderRadius: '12px',
-                      color: 'white'
-                    }} 
-                  />
-                  <Area
-                    type="monotone"
-                    dataKey="screenTime"
-                    stroke="#3B82F6"
-                    fillOpacity={1}
-                    fill="url(#colorScreenTime)"
-                  />
-                </AreaChart>
-              </ResponsiveContainer>
+              
+              {weeklyLoading ? (
+                <div className="flex items-center justify-center py-8">
+                  <div className="w-8 h-8 border-2 border-purple-500/30 border-t-purple-500 rounded-full animate-spin"></div>
+                  <span className="ml-3 text-gray-300">Loading weekly data...</span>
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height={300}>
+                  <AreaChart data={weeklyData}>
+                    <defs>
+                      <linearGradient id="colorScreenTime" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#3B82F6" stopOpacity={0.8}/>
+                        <stop offset="95%" stopColor="#3B82F6" stopOpacity={0.1}/>
+                      </linearGradient>
+                    </defs>
+                    <XAxis dataKey="day" axisLine={false} tickLine={false} tick={{fill: 'white'}} />
+                    <YAxis axisLine={false} tickLine={false} tick={{fill: 'white'}} />
+                    <Tooltip 
+                      contentStyle={{ 
+                        backgroundColor: 'rgba(0,0,0,0.8)', 
+                        border: 'none', 
+                        borderRadius: '12px',
+                        color: 'white'
+                      }} 
+                    />
+                    <Area
+                      type="monotone"
+                      dataKey="screenTime"
+                      stroke="#3B82F6"
+                      fillOpacity={1}
+                      fill="url(#colorScreenTime)"
+                    />
+                  </AreaChart>
+                </ResponsiveContainer>
+              )}
             </div>
           </div>
         )}
@@ -318,23 +576,34 @@ export default function Dashboard() {
               <h2 className="text-xl font-bold text-white mb-6 flex items-center">
                 <Activity className="w-5 h-5 mr-2" />
                 Focus vs Screen Time
+                {weeklyLoading && (
+                  <div className="ml-2 w-4 h-4 border-2 border-purple-500/30 border-t-purple-500 rounded-full animate-spin"></div>
+                )}
               </h2>
-              <ResponsiveContainer width="100%" height={300}>
-                <BarChart data={weeklyData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
-                  <XAxis dataKey="day" axisLine={false} tickLine={false} tick={{fill: 'white'}} />
-                  <YAxis axisLine={false} tickLine={false} tick={{fill: 'white'}} />
-                  <Tooltip 
-                    contentStyle={{ 
-                      backgroundColor: 'rgba(0,0,0,0.8)', 
-                      border: 'none', 
-                      borderRadius: '12px',
-                      color: 'white'
-                    }} 
-                  />
-                  <Bar dataKey="focus" fill="#10B981" radius={[4, 4, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
+              
+              {weeklyLoading ? (
+                <div className="flex items-center justify-center py-8">
+                  <div className="w-8 h-8 border-2 border-purple-500/30 border-t-purple-500 rounded-full animate-spin"></div>
+                  <span className="ml-3 text-gray-300">Loading focus data...</span>
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height={300}>
+                  <BarChart data={weeklyData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
+                    <XAxis dataKey="day" axisLine={false} tickLine={false} tick={{fill: 'white'}} />
+                    <YAxis axisLine={false} tickLine={false} tick={{fill: 'white'}} />
+                    <Tooltip 
+                      contentStyle={{ 
+                        backgroundColor: 'rgba(0,0,0,0.8)', 
+                        border: 'none', 
+                        borderRadius: '12px',
+                        color: 'white'
+                      }} 
+                    />
+                    <Bar dataKey="focus" fill="#10B981" radius={[4, 4, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              )}
             </div>
           </div>
         )}
