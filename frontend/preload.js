@@ -3,18 +3,6 @@ const { contextBridge, ipcRenderer } = require('electron');
 // Expose protected methods that allow the renderer process to use
 // the ipcRenderer without exposing the entire object
 contextBridge.exposeInMainWorld('electronAPI', {
-  // Storage operations for offline functionality
-  storage: {
-    read: (filename) => ipcRenderer.invoke('storage-read', filename),
-    write: (filename, data) => ipcRenderer.invoke('storage-write', filename, data)
-  },
-  
-  // Network and server checks
-  checkServer: () => ipcRenderer.invoke('check-server'),
-  
-  // System information
-  getStorageDir: () => ipcRenderer.invoke('get-storage-dir'),
-  
   // Activity tracking with active-win
   activityTracker: {
     getActiveWindow: () => ipcRenderer.invoke('get-active-window'),

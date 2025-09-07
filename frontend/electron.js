@@ -1,9 +1,6 @@
 import { app, BrowserWindow, Menu, ipcMain, dialog } from 'electron';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { promises as fs } from 'fs';
-import { homedir } from 'os';
-import net from 'net';
 import activeWin from 'active-win';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -12,41 +9,6 @@ const __dirname = dirname(__filename);
 // Keep a global reference of the window object
 let mainWindow;
 
-// Storage directory for offline functionality
-const STORAGE_DIR = join(homedir(), '.metamind');
-
-// Ensure storage directory exists
-async function ensureStorageDir() {
-  try {
-    await fs.access(STORAGE_DIR);
-  } catch {
-    await fs.mkdir(STORAGE_DIR, { recursive: true });
-  }
-}
-
-// Check if server is running
-function checkServerConnection() {
-  return new Promise((resolve) => {
-    const socket = new net.Socket();
-    socket.setTimeout(3000);
-    
-    socket.on('connect', () => {
-      socket.destroy();
-      resolve(true);
-    });
-    
-    socket.on('timeout', () => {
-      socket.destroy();
-      resolve(false);
-    });
-    
-    socket.on('error', () => {
-      resolve(false);
-    });
-    
-    socket.connect(3000, 'localhost');
-  });
-}
 
 function createWindow() {
   // Create the browser window
@@ -172,42 +134,6 @@ function createMenu() {
   Menu.setApplicationMenu(menu);
 }
 
-// IPC handlers for offline functionality
-ipcMain.handle('storage-read', async (event, filename) => {
-  try {
-    const filePath = join(STORAGE_DIR, filename);
-    console.log(`Reading file: ${filePath}`);
-    const data = await fs.readFile(filePath, 'utf8');
-    console.log(`File read successfully: ${filename}`);
-    return JSON.parse(data);
-  } catch (error) {
-    console.log(`Failed to read file ${filename}:`, error.message);
-    return null;
-  }
-});
-
-ipcMain.handle('storage-write', async (event, filename, data) => {
-  try {
-    await ensureStorageDir();
-    const filePath = join(STORAGE_DIR, filename);
-    console.log(`Writing file: ${filePath}`);
-    console.log(`Data to write:`, data);
-    await fs.writeFile(filePath, JSON.stringify(data, null, 2));
-    console.log(`File written successfully: ${filename}`);
-    return true;
-  } catch (error) {
-    console.error('Storage write error:', error);
-    return false;
-  }
-});
-
-ipcMain.handle('check-server', async () => {
-  return await checkServerConnection();
-});
-
-ipcMain.handle('get-storage-dir', () => {
-  return STORAGE_DIR;
-});
 
 // Activity tracking with active-win
 let activityTrackingInterval = null;
@@ -280,8 +206,7 @@ ipcMain.handle('stop-activity-tracking', () => {
 });
 
 // App event handlers
-app.whenReady().then(async () => {
-  await ensureStorageDir();
+app.whenReady().then(() => {
   createWindow();
 
   app.on('activate', () => {

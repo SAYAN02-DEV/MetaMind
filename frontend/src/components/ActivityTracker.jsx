@@ -1,7 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import activityTracker from '../utils/activityTracker.js';
-import { testOfflineStorage } from '../utils/testOfflineStorage.js';
-import { testRealTimeTracking } from '../utils/testRealTimeTracking.js';
 
 const ActivityTracker = () => {
   const [trackingStatus, setTrackingStatus] = useState({
@@ -79,25 +77,6 @@ const ActivityTracker = () => {
     }
   };
 
-  const handleTestStorage = async () => {
-    console.log('Running offline storage test...');
-    try {
-      const result = await testOfflineStorage();
-      console.log('Storage test completed:', result);
-    } catch (error) {
-      console.error('Storage test failed:', error);
-    }
-  };
-
-  const handleTestRealTime = async () => {
-    console.log('Running real-time tracking test...');
-    try {
-      const result = await testRealTimeTracking();
-      console.log('Real-time test completed:', result);
-    } catch (error) {
-      console.error('Real-time test failed:', error);
-    }
-  };
 
   const formatDuration = (seconds) => {
     const hours = Math.floor(seconds / 3600);
@@ -176,9 +155,9 @@ const ActivityTracker = () => {
 
         {/* Pending Sessions */}
         {trackingStatus.completedSessionsCount > 0 && (
-          <div className="mb-3 p-2 bg-yellow-900/30 border border-yellow-600/30 rounded">
-            <div className="text-yellow-400 text-xs">
-              {trackingStatus.completedSessionsCount} sessions pending sync
+          <div className="mb-3 p-2 bg-blue-900/30 border border-blue-600/30 rounded">
+            <div className="text-blue-400 text-xs">
+              {trackingStatus.completedSessionsCount} sessions ready to sync
             </div>
           </div>
         )}
@@ -208,22 +187,6 @@ const ActivityTracker = () => {
           >
             ↻
           </button>
-          
-          <button
-            onClick={handleTestStorage}
-            className="bg-blue-600 hover:bg-blue-700 text-white text-sm py-2 px-2 rounded transition-colors"
-            title="Test Storage"
-          >
-            Storage
-          </button>
-          
-          <button
-            onClick={handleTestRealTime}
-            className="bg-purple-600 hover:bg-purple-700 text-white text-sm py-2 px-2 rounded transition-colors"
-            title="Test Real-Time Tracking"
-          >
-            Track
-          </button>
         </div>
 
         {/* Status Info */}
@@ -231,7 +194,7 @@ const ActivityTracker = () => {
           {!trackingStatus.isElectron ? (
             <span className="text-red-400">Not in Electron - tracking unavailable</span>
           ) : trackingStatus.isTracking ? (
-            'Tracking active apps...'
+            <span className="text-green-400">🌐 Online-only mode - syncing to server</span>
           ) : (
             'Click Start to begin tracking'
           )}

@@ -1,4 +1,3 @@
-import offlineStorage from './offlineStorage.js';
 
 class ActivityTracker {
   constructor() {
@@ -6,7 +5,8 @@ class ActivityTracker {
     this.currentSessions = new Map(); // Track ongoing sessions by app name
     this.completedSessions = [];
     this.syncInterval = null;
-    this.autoSyncIntervalMs = 30000; // 30 seconds
+    this.autoSyncIntervalMs = 10000; // 10 seconds for direct server sync
+    this.authToken = null;
   }
 
   // Check if we're running in Electron (dynamic check)
@@ -29,10 +29,15 @@ class ActivityTracker {
     }
 
     try {
-      console.log('🚀 STARTING: Activity tracking initialization...');
+      console.log('🚀 STARTING: Online-only activity tracking...');
       
-      // Load sync state first
-      await this.loadSyncState();
+      // Get auth token from localStorage
+      await this.loadAuthToken();
+      
+      if (!this.authToken) {
+        console.error('❌ FAILED: No auth token found. Please login first.');
+        return false;
+      }
       
       // Set up event listeners for session events
       window.electronAPI.activityTracker.onSessionStarted((event, session) => {
@@ -52,19 +57,7 @@ class ActivityTracker {
         this.isTracking = true;
         this.startAutoSync();
         
-        console.log('✅ TRACKING ACTIVE: Monitoring apps every', intervalMs/1000, 'seconds');
-        
-        // Perform initial full sync
-        setTimeout(() => {
-          console.log('🔄 INITIAL SYNC: Checking for pending data...');
-          this.performFullSync();
-        }, 5000);
-        
-        // Set up periodic full sync every 10 minutes
-        this.fullSyncInterval = setInterval(() => {
-          console.log('⏰ PERIODIC SYNC: Running scheduled sync...');
-          this.performFullSync();
-        }, 10 * 60 * 1000);
+        console.log('✅ TRACKING ACTIVE: Direct server sync every', this.autoSyncIntervalMs/1000, 'seconds');
         
         return true;
       } else {
@@ -90,10 +83,9 @@ class ActivityTracker {
         this.isTracking = false;
         this.stopAutoSync();
         
-        // Clear periodic sync interval
-        if (this.fullSyncInterval) {
-          clearInterval(this.fullSyncInterval);
-          this.fullSyncInterval = null;
+        // Send any remaining sessions before stopping
+        if (this.completedSessions.length > 0) {
+          await this.syncToServer();
         }
         
         console.log('🛑 STOPPED: Activity tracking disabled');
@@ -141,8 +133,8 @@ class ActivityTracker {
     this.currentSessions.delete(session.app);
 
     // Trigger immediate sync if we have many completed sessions
-    if (this.completedSessions.length >= 10) {
-      this.syncToStorage();
+    if (this.completedSessions.length >= 5) {
+      this.syncToServer();
     }
   }
 
@@ -188,7 +180,7 @@ class ActivityTracker {
     }
 
     this.syncInterval = setInterval(() => {
-      this.syncToStorage();
+      this.syncToServer();
     }, this.autoSyncIntervalMs);
   }
 
@@ -200,38 +192,40 @@ class ActivityTracker {
     }
   }
 
-  // Sync completed sessions to storage
-  async syncToStorage() {
-    console.log(`Syncing ${this.completedSessions.length} completed sessions to storage`);
-    
+  // Load auth token from localStorage
+  async loadAuthToken() {
+    try {
+      const authData = JSON.parse(localStorage.getItem('auth') || '{}');
+      this.authToken = authData.token || null;
+      console.log('Auth token loaded:', !!this.authToken);
+    } catch (error) {
+      console.error('Failed to load auth token:', error);
+      this.authToken = null;
+    }
+  }
+
+
+  // Sync directly to server (online-only)
+  async syncToServer() {
     if (this.completedSessions.length === 0) {
       console.log('No completed sessions to sync');
       return;
     }
 
+    if (!this.authToken) {
+      console.error('❌ NO AUTH: Missing token, cannot sync to server');
+      return;
+    }
+
     try {
-      // Get current date for grouping
-      const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD format
-      console.log('Syncing data for date:', today);
-
-      // Load existing activity data
-      console.log('Loading existing activity data...');
-      let activityData = await offlineStorage.retrieve('activity_data') || {};
-      console.log('Existing activity data:', activityData);
+      // Group sessions by app
+      const appsData = {};
       
-      // Initialize today's data if it doesn't exist
-      if (!activityData[today]) {
-        activityData[today] = {};
-        console.log('Initialized data for today');
-      }
-
-      // Process completed sessions
       for (const session of this.completedSessions) {
         const appName = session.app;
         
-        // Initialize app data if it doesn't exist
-        if (!activityData[today][appName]) {
-          activityData[today][appName] = {
+        if (!appsData[appName]) {
+          appsData[appName] = {
             app: appName,
             category: session.category,
             duration: 0,
@@ -239,8 +233,7 @@ class ActivityTracker {
           };
         }
 
-        // Add session data
-        activityData[today][appName].sessions.push({
+        appsData[appName].sessions.push({
           startTime: session.startTime,
           endTime: session.endTime,
           duration: session.duration,
@@ -248,215 +241,85 @@ class ActivityTracker {
           url: session.url || ''
         });
 
-        // Update total duration
-        activityData[today][appName].duration += session.duration;
-      }
-
-      // Save to storage
-      console.log('Saving activity data to storage:', activityData);
-      const saveResult = await offlineStorage.store('activity_data', activityData);
-      console.log('Storage save result:', saveResult);
-      
-      if (saveResult) {
-        console.log(`Successfully synced ${this.completedSessions.length} sessions to storage`);
-        
-        // Clear completed sessions after successful sync
-        this.completedSessions = [];
-
-        // Try to sync to server if online
-        await this.syncToServer(activityData[today]);
-      } else {
-        console.error('Failed to save activity data to storage');
-      }
-
-    } catch (error) {
-      console.error('Failed to sync activity data to storage:', error);
-    }
-  }
-
-  // Track synced sessions to prevent duplicates
-  syncedSessions = new Set();
-  lastSyncTimestamp = null;
-
-  // Generate unique session ID
-  generateSessionId(session) {
-    return `${session.app}_${session.startTime}_${session.endTime}_${session.duration}`;
-  }
-
-  // Check if session was already synced
-  isSessionSynced(session) {
-    const sessionId = this.generateSessionId(session);
-    return this.syncedSessions.has(sessionId);
-  }
-
-  // Mark session as synced
-  markSessionSynced(session) {
-    const sessionId = this.generateSessionId(session);
-    this.syncedSessions.add(sessionId);
-  }
-
-  // Sync to server (if online) with duplicate prevention
-  async syncToServer(todayData) {
-    try {
-      // Check if server is available
-      const isOnline = await offlineStorage.checkServerConnection();
-      if (!isOnline) {
-        console.log('📡 OFFLINE: Server not available, data stored locally 💾');
-        return;
-      }
-
-      // Get auth data
-      const authData = await offlineStorage.retrieveAuth();
-      if (!authData || !authData.token) {
-        console.log('🔐 NO AUTH: Missing token, skipping server sync 🚫');
-        return;
-      }
-
-      // Filter out already synced sessions
-      const newAppsData = [];
-      let totalNewSessions = 0;
-
-      Object.values(todayData).forEach(appData => {
-        const newSessions = appData.sessions.filter(session => !this.isSessionSynced(session));
-        
-        if (newSessions.length > 0) {
-          const newDuration = newSessions.reduce((sum, session) => sum + session.duration, 0);
-          
-          newAppsData.push({
-            app: appData.app,
-            duration: newDuration,
-            sessions: newSessions.map(session => ({
-              startTime: session.startTime,
-              endTime: session.endTime,
-              duration: session.duration,
-              title: session.title || '',
-              url: session.url || ''
-            }))
-          });
-          
-          totalNewSessions += newSessions.length;
-        }
-      });
-
-      if (newAppsData.length === 0) {
-        console.log('💤 SKIP: No new sessions to sync to server');
-        return;
+        appsData[appName].duration += session.duration;
       }
 
       // Prepare data for server
       const today = new Date().toISOString().split('T')[0];
       const serverData = {
         date: today,
-        apps: newAppsData
+        apps: Object.values(appsData)
       };
 
-      console.log(`📤 UPLOADING: ${totalNewSessions} new sessions across ${newAppsData.length} apps to backend... 🔄`);
+      console.log(`📤 UPLOADING: ${this.completedSessions.length} sessions across ${Object.keys(appsData).length} apps to backend...`);
 
       // Send to server using the /activities endpoint
       const response = await fetch('http://localhost:3000/api/users/activities', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'token': authData.token // Use 'token' header as expected by backend
+          'token': this.authToken
         },
         body: JSON.stringify(serverData)
       });
 
       if (response.ok) {
         const result = await response.json();
-        console.log(`🚀 SUCCESS: Uploaded ${totalNewSessions} sessions to backend! ✅`, result.message);
+        console.log(`🚀 SUCCESS: Uploaded ${this.completedSessions.length} sessions to backend! ✅`, result.message);
         
-        // Mark sessions as synced
-        Object.values(todayData).forEach(appData => {
-          appData.sessions.forEach(session => {
-            this.markSessionSynced(session);
-          });
-        });
-        
-        this.lastSyncTimestamp = Date.now();
-        
-        // Store sync state to localStorage
-        await this.saveSyncState();
+        // Clear completed sessions after successful sync
+        this.completedSessions = [];
         
       } else {
         const errorData = await response.json().catch(() => ({}));
-        console.error(`❌ FAILED: Could not upload to backend! 😞`, response.statusText, errorData);
+        console.error(`❌ FAILED: Could not upload to backend!`, response.statusText, errorData);
+        
+        // If auth error, try to reload token
+        if (response.status === 401 || response.status === 403) {
+          await this.loadAuthToken();
+        }
       }
 
     } catch (error) {
-      console.error('🔥 ERROR: Server sync failed! 💥', error);
+      console.error('🔥 ERROR: Server sync failed!', error);
     }
   }
 
-  // Save sync state to prevent duplicates across app restarts
-  async saveSyncState() {
-    try {
-      const syncState = {
-        syncedSessions: Array.from(this.syncedSessions),
-        lastSyncTimestamp: this.lastSyncTimestamp
-      };
-      await offlineStorage.store('activity_sync_state', syncState);
-    } catch (error) {
-      console.error('Failed to save sync state:', error);
-    }
-  }
 
-  // Load sync state to restore duplicate prevention
-  async loadSyncState() {
-    try {
-      const syncState = await offlineStorage.retrieve('activity_sync_state');
-      if (syncState) {
-        this.syncedSessions = new Set(syncState.syncedSessions || []);
-        this.lastSyncTimestamp = syncState.lastSyncTimestamp;
-        console.log(`Loaded sync state: ${this.syncedSessions.size} synced sessions`);
-      }
-    } catch (error) {
-      console.error('Failed to load sync state:', error);
-    }
-  }
-
-  // Periodic full sync for any missed data
-  async performFullSync() {
-    if (!this.isElectron) return;
-
-    try {
-      console.log('🔍 SYNC CHECK: Looking for data to sync...');
-      const todayData = await this.getTodayData();
-      
-      if (todayData && todayData.sessions && todayData.sessions.length > 0) {
-        console.log(`📊 FOUND DATA: ${todayData.sessions.length} sessions for today`);
-        await this.syncToServer(todayData);
-      } else {
-        console.log('📭 NO DATA: No sessions found to sync');
-      }
-    } catch (error) {
-      console.error('🔥 SYNC ERROR: Full sync failed!', error);
-    }
-  }
-
-  // Get current activity data
+  // Get current activity data (online-only - returns current session stats)
   async getActivityData(date = null) {
-    const targetDate = date || new Date().toISOString().split('T')[0];
-    const activityData = await offlineStorage.retrieve('activity_data') || {};
-    return activityData[targetDate] || {};
-  }
-
-  // Get today's activity data for syncing
-  async getTodayData() {
-    const today = new Date().toISOString().split('T')[0];
-    const activityData = await offlineStorage.retrieve('activity_data') || {};
-    const todayData = activityData[today];
+    // Return current session data since we don't store locally anymore
+    const appsData = {};
     
-    if (!todayData) {
-      return null;
-    }
-
-    // Convert the data format to match what syncToServer expects
-    return {
-      date: today,
-      sessions: todayData.sessions || [],
-      apps: todayData.apps || []
-    };
+    // Add current active sessions
+    this.currentSessions.forEach(session => {
+      const appName = session.app;
+      if (!appsData[appName]) {
+        appsData[appName] = {
+          app: appName,
+          category: session.category,
+          duration: 0,
+          sessions: []
+        };
+      }
+      
+      // Calculate current session duration
+      const now = new Date();
+      const startTime = new Date(session.startTime);
+      const currentDuration = Math.round((now - startTime) / 1000);
+      
+      appsData[appName].sessions.push({
+        startTime: session.startTime,
+        endTime: null, // Still active
+        duration: currentDuration,
+        title: session.title || '',
+        url: session.url || ''
+      });
+      
+      appsData[appName].duration += currentDuration;
+    });
+    
+    return appsData;
   }
 
   // Get tracking status
@@ -486,7 +349,6 @@ class ActivityTracker {
   // Clear all activity data
   async clearAllData() {
     try {
-      await offlineStorage.store('activity_data', {});
       this.completedSessions = [];
       this.currentSessions.clear();
       console.log('All activity data cleared');
