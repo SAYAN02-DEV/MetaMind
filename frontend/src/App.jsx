@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Outlet, Navigate } from "react-router-dom";
 import NavigationBar from './components/NavigationBar';
 import Footer from './components/Footer';
+import ActivityTracker from './components/ActivityTracker';
 import './App.css'
 import Dashboard from './components/Dashboard';
 import LoginCard from "./components/LoginCard";
@@ -49,6 +50,7 @@ function Layout(){
       <NavigationBar/>
       <Outlet/>
       <Footer/>
+      <ActivityTracker/>
     </div>
   )
 }

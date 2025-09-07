@@ -67,6 +67,32 @@ export const usageAPI = {
   }),
   getWeeklyFocusAnalysis: () => axios.get(`${BASE_URL}/gemini-weekly-focus`, {
     headers: { token: localStorage.getItem("token") }
+  }),
+  // New: fetch full user data for context (optional for client-side usage)
+  getUserFullData: () => axios.get(`${BASE_URL}/getUserFullData`, {
+    headers: { token: localStorage.getItem("token") }
+  }),
+  // New: chat with Gemini using server-side context
+  chatWithGemini: (prompt) => axios.post(`${BASE_URL}/gemini-chat`, { prompt }, {
+    headers: { token: localStorage.getItem("token") }
+  }),
+  // ML Model API calls
+  getMLHealth: () => axios.get(`${BASE_URL}/ml-health`, {
+    headers: { token: localStorage.getItem("token") }
+  }),
+  predictBehavior: (age, gender, screenTimeHours) => axios.post(`${BASE_URL}/predict-behavior`, 
+    { age, gender, screenTimeHours }, {
+    headers: { token: localStorage.getItem("token") }
+  }),
+  predictMyBehavior: () => axios.get(`${BASE_URL}/predict-my-behavior`, {
+    headers: { token: localStorage.getItem("token") }
+  }),
+  predictBatch: (users) => axios.post(`${BASE_URL}/predict-batch`, { users }, {
+    headers: { token: localStorage.getItem("token") }
+  }),
+  // Anomaly Detection API
+  getAnomalyDetection: () => axios.get(`${BASE_URL}/anomaly-detection`, {
+    headers: { token: localStorage.getItem("token") }
   })
 };
 

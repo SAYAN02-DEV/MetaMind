@@ -13,6 +13,7 @@ import {
   Eye,
   Heart,
   Moon,
+  AlertTriangle,
   Sun,
   RefreshCw
 } from 'lucide-react';
@@ -32,6 +33,7 @@ import {
   BarChart,
   Bar
 } from 'recharts';
+import ChatbotOverlay from './ChatbotOverlay';
 
 export default function Dashboard() {
   const [currentTime, setCurrentTime] = useState(new Date());
@@ -48,6 +50,16 @@ export default function Dashboard() {
   const [challengesLoading, setChallengesLoading] = useState(true);
   const [error, setError] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [geminiCallsToday, setGeminiCallsToday] = useState(0);
+  const [lastGeminiCallTime, setLastGeminiCallTime] = useState(null);
+  const [mlPrediction, setMlPrediction] = useState(null);
+  const [mlLoading, setMlLoading] = useState(false);
+  const [mlError, setMlError] = useState(null);
+  const [anomalies, setAnomalies] = useState([]);
+  const [anomalyLoading, setAnomalyLoading] = useState(false);
+  const [anomalyError, setAnomalyError] = useState(null);
+  const [yesterdayUsage, setYesterdayUsage] = useState([]);
+  const [screenTimeTrend, setScreenTimeTrend] = useState(null);
 
   const { user } = useAuth();
 
@@ -143,36 +155,141 @@ export default function Dashboard() {
 
   const productivityCategoryData = calculateProductivityData();
 
-  const insights = [
-    {
-      icon: <TrendingUp className="w-5 h-5" />,
-      title: "Screen Time Trend",
-      value: "-12%",
-      description: "Down from last week",
-      color: "text-green-500"
-    },
-    {
+  // Calculate dynamic insights from real data
+  const calculateInsights = () => {
+    const insights = [];
+
+    // Screen Time Trend (from real data)
+    if (screenTimeTrend) {
+      insights.push({
+        icon: <TrendingUp className="w-5 h-5" />,
+        title: "Screen Time Trend",
+        value: screenTimeTrend.trend === 'decrease' ? `-${screenTimeTrend.percentage}%` : 
+               screenTimeTrend.trend === 'increase' ? `+${screenTimeTrend.percentage}%` : 
+               `${screenTimeTrend.percentage}%`,
+        description: screenTimeTrend.message || "Compared to yesterday",
+        color: screenTimeTrend.color || "text-gray-400"
+      });
+    } else {
+      insights.push({
+        icon: <TrendingUp className="w-5 h-5" />,
+        title: "Screen Time Trend",
+        value: "--",
+        description: "Calculating...",
+        color: "text-gray-400"
+      });
+    }
+
+    // Focus Score (from productivity analysis)
+    const todayTotalTime = todayUsage.reduce((acc, app) => acc + app.duration, 0);
+    let focusScore = 0;
+    let focusDescription = "No data";
+    let focusColor = "text-gray-400";
+
+    if (todayTotalTime > 0 && Object.keys(productivityData).length > 0) {
+      const productiveTime = todayUsage
+        .filter(app => productivityData[app.app] === "productive")
+        .reduce((acc, app) => acc + app.duration, 0);
+      
+      focusScore = Math.round((productiveTime / todayTotalTime) * 100);
+      
+      if (focusScore >= 80) {
+        focusDescription = "Excellent focus";
+        focusColor = "text-green-500";
+      } else if (focusScore >= 60) {
+        focusDescription = "Good focus";
+        focusColor = "text-blue-500";
+      } else if (focusScore >= 40) {
+        focusDescription = "Average focus";
+        focusColor = "text-yellow-500";
+      } else {
+        focusDescription = "Needs improvement";
+        focusColor = "text-red-500";
+      }
+    } else if (focusAnalysisData.length > 0) {
+      // Fallback to focus analysis data
+      const todayFocus = focusAnalysisData[focusAnalysisData.length - 1]?.focus || 0;
+      focusScore = todayFocus;
+      focusDescription = todayFocus >= 75 ? "Above average" : todayFocus >= 50 ? "Average" : "Below average";
+      focusColor = todayFocus >= 75 ? "text-green-500" : todayFocus >= 50 ? "text-blue-500" : "text-yellow-500";
+    }
+
+    insights.push({
       icon: <Target className="w-5 h-5" />,
       title: "Focus Score",
-      value: "78%",
-      description: "Above average",
-      color: "text-blue-500"
-    },
-    {
+      value: focusScore > 0 ? `${focusScore}%` : "--",
+      description: focusDescription,
+      color: focusColor
+    });
+
+    // Well-being Score (calculated from app balance and usage patterns)
+    let wellBeingScore = 0;
+    let wellBeingDescription = "No data";
+    let wellBeingColor = "text-gray-400";
+
+    if (todayTotalTime > 0) {
+      // Calculate well-being based on:
+      // 1. Balanced usage (not too much screen time)
+      // 2. Productive vs non-productive ratio
+      // 3. Variety of apps (not obsessing over one app)
+      
+      const screenTimeHours = todayTotalTime / 3600;
+      const appVariety = todayUsage.length;
+      const maxAppTime = Math.max(...todayUsage.map(app => app.duration));
+      const dominanceRatio = maxAppTime / todayTotalTime;
+      
+      // Screen time component (0-40 points)
+      let screenTimePoints = 0;
+      if (screenTimeHours <= 4) screenTimePoints = 40;
+      else if (screenTimeHours <= 6) screenTimePoints = 30;
+      else if (screenTimeHours <= 8) screenTimePoints = 20;
+      else screenTimePoints = 10;
+      
+      // Focus component (0-40 points)
+      const focusPoints = (focusScore / 100) * 40;
+      
+      // Balance component (0-20 points) - lower dominance is better
+      const balancePoints = Math.max(0, 20 - (dominanceRatio * 30));
+      
+      wellBeingScore = Math.round(screenTimePoints + focusPoints + balancePoints);
+      
+      if (wellBeingScore >= 80) {
+        wellBeingDescription = "Excellent";
+        wellBeingColor = "text-green-500";
+      } else if (wellBeingScore >= 60) {
+        wellBeingDescription = "Good";
+        wellBeingColor = "text-blue-500";
+      } else if (wellBeingScore >= 40) {
+        wellBeingDescription = "Fair";
+        wellBeingColor = "text-yellow-500";
+      } else {
+        wellBeingDescription = "Needs attention";
+        wellBeingColor = "text-red-500";
+      }
+    }
+
+    insights.push({
       icon: <Heart className="w-5 h-5" />,
       title: "Well-being",
-      value: "85%",
-      description: "Excellent",
-      color: "text-pink-500"
-    },
-    {
-      icon: <Moon className="w-5 h-5" />,
-      title: "Sleep Quality",
-      value: "7.2h",
-      description: "Good rest",
-      color: "text-purple-500"
-    }
-  ];
+      value: wellBeingScore > 0 ? `${wellBeingScore}%` : "--",
+      description: wellBeingDescription,
+      color: wellBeingColor
+    });
+
+    // Daily Screen Time (replace sleep quality with actual tracked metric)
+    const totalScreenTimeHours = todayTotalTime / 3600;
+    insights.push({
+      icon: <Clock className="w-5 h-5" />,
+      title: "Screen Time Today",
+      value: totalScreenTimeHours > 0 ? `${totalScreenTimeHours.toFixed(1)}h` : "0h",
+      description: totalScreenTimeHours > 8 ? "High usage" : totalScreenTimeHours > 4 ? "Moderate usage" : "Light usage",
+      color: totalScreenTimeHours > 8 ? "text-red-500" : totalScreenTimeHours > 4 ? "text-yellow-500" : "text-green-500"
+    });
+
+    return insights;
+  };
+
+  const insights = calculateInsights();
 
   // Function to categorize apps
   const categorizeApp = (appName) => {
@@ -200,6 +317,42 @@ export default function Dashboard() {
     return appCategories[appName] || 'Other';
   };
 
+  // Function to calculate screen time trend
+  const calculateScreenTimeTrend = useCallback((todayTotal, yesterdayTotal) => {
+    if (yesterdayTotal === 0) {
+      return { percentage: 0, trend: 'neutral', color: 'text-gray-400' };
+    }
+    
+    const percentageChange = ((todayTotal - yesterdayTotal) / yesterdayTotal) * 100;
+    const roundedPercentage = Math.round(Math.abs(percentageChange));
+    
+    if (percentageChange > 5) {
+      return {
+        percentage: roundedPercentage,
+        trend: 'increase',
+        color: 'text-red-400',
+        icon: '↗️',
+        message: `${roundedPercentage}% more than yesterday`
+      };
+    } else if (percentageChange < -5) {
+      return {
+        percentage: roundedPercentage,
+        trend: 'decrease',
+        color: 'text-green-400',
+        icon: '↘️',
+        message: `${roundedPercentage}% less than yesterday`
+      };
+    } else {
+      return {
+        percentage: roundedPercentage,
+        trend: 'stable',
+        color: 'text-blue-400',
+        icon: '➡️',
+        message: 'Similar to yesterday'
+      };
+    }
+  }, []);
+
   // Function to fetch today's usage data
   const fetchTodayUsage = useCallback(async (isRefresh = false) => {
     try {
@@ -222,6 +375,12 @@ export default function Dashboard() {
           category: categorizeApp(item.app)
         }));
         setTodayUsage(usageWithCategories);
+        
+        // Calculate today's total screen time
+        const todayTotal = usageWithCategories.reduce((acc, app) => acc + app.duration, 0);
+        
+        // Fetch yesterday's data for comparison
+        fetchYesterdayUsage(todayTotal);
       } else {
         // If no data found, use fallback data
         setTodayUsage(fallbackUsage);
@@ -246,7 +405,52 @@ export default function Dashboard() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [user]);
+  }, [user, calculateScreenTimeTrend]);
+
+  // Function to fetch yesterday's usage for trend comparison
+  const fetchYesterdayUsage = useCallback(async (todayTotal) => {
+    try {
+      const response = await usageAPI.getWeeklyDurations();
+      
+      if (response.data.message === 'Success' && response.data.durations) {
+        const yesterday = new Date();
+        yesterday.setDate(yesterday.getDate() - 1);
+        const yesterdayStr = yesterday.toISOString().split('T')[0];
+        
+        // Find yesterday's data
+        const yesterdayData = response.data.durations.find(day => 
+          day.date.split('T')[0] === yesterdayStr
+        );
+        
+        if (yesterdayData) {
+          const yesterdayTotal = yesterdayData.apps.reduce((acc, app) => acc + app.duration, 0);
+          setYesterdayUsage(yesterdayData.apps);
+          
+          // Calculate trend
+          const trend = calculateScreenTimeTrend(todayTotal, yesterdayTotal);
+          setScreenTimeTrend(trend);
+        } else {
+          // No yesterday data available
+          setScreenTimeTrend({
+            percentage: 0,
+            trend: 'no-data',
+            color: 'text-gray-400',
+            icon: '📊',
+            message: 'No previous day data'
+          });
+        }
+      }
+    } catch (err) {
+      console.error('Error fetching yesterday usage:', err);
+      setScreenTimeTrend({
+        percentage: 0,
+        trend: 'error',
+        color: 'text-gray-400',
+        icon: '⚠️',
+        message: 'Unable to compare'
+      });
+    }
+  }, [calculateScreenTimeTrend]);
 
   // Function to fetch weekly usage data
   const fetchWeeklyData = useCallback(async () => {
@@ -323,6 +527,13 @@ export default function Dashboard() {
       setProductivityLoading(true);
       console.log('Fetching productivity data from Gemini API...');
       
+      if (!canMakeGeminiCall()) {
+        console.log('Cannot make Gemini call - using fallback data');
+        setProductivityData({});
+        setProductivityLoading(false);
+        return;
+      }
+      
       const response = await usageAPI.getProductivityAnalysis();
       console.log('Productivity API Response:', response.data);
 
@@ -361,6 +572,13 @@ export default function Dashboard() {
     try {
       setFocusAnalysisLoading(true);
       console.log('Fetching focus analysis data from Gemini API...');
+      
+      if (!canMakeGeminiCall()) {
+        console.log('Cannot make Gemini call - using fallback data');
+        setFocusAnalysisData(fallbackFocusAnalysisData);
+        setFocusAnalysisLoading(false);
+        return;
+      }
       
       const response = await usageAPI.getWeeklyFocusAnalysis();
       console.log('Focus Analysis API Response:', response.data);
@@ -414,11 +632,63 @@ export default function Dashboard() {
     }
   }, [user]);
 
+  // Function to fetch ML behavior prediction
+  const fetchMLPrediction = useCallback(async () => {
+    try {
+      setMlLoading(true);
+      setMlError(null);
+      console.log('Fetching ML behavior prediction...');
+      
+      const response = await usageAPI.predictMyBehavior();
+      console.log('ML Prediction Response:', response.data);
+
+      if (response.data.message === 'Behavior prediction successful' && response.data.prediction) {
+        setMlPrediction(response.data);
+      } else {
+        setMlError('No prediction data available');
+      }
+    } catch (err) {
+      console.error('Error fetching ML prediction:', err);
+      setMlError(err.response?.data?.message || 'Failed to fetch ML prediction');
+    } finally {
+      setMlLoading(false);
+    }
+  }, []);
+
+  const fetchAnomalyDetection = useCallback(async () => {
+    try {
+      setAnomalyLoading(true);
+      setAnomalyError(null);
+      console.log('Fetching anomaly detection...');
+      
+      const response = await usageAPI.getAnomalyDetection();
+      console.log('Anomaly Detection Response:', response.data);
+
+      if (response.data.message === 'Anomaly detection successful') {
+        setAnomalies(response.data.anomalies || []);
+      } else {
+        setAnomalyError('No anomaly data available');
+      }
+    } catch (err) {
+      console.error('Error fetching anomaly detection:', err);
+      setAnomalyError(err.response?.data?.message || 'Failed to fetch anomaly detection');
+    } finally {
+      setAnomalyLoading(false);
+    }
+  }, []);
+
   // Function to fetch challenges data
   const fetchChallenges = useCallback(async () => {
     try {
       setChallengesLoading(true);
       console.log('Fetching challenges from Gemini API...');
+      
+      if (!canMakeGeminiCall()) {
+        console.log('Cannot make Gemini call - using fallback data');
+        setChallenges(fallbackChallenges);
+        setChallengesLoading(false);
+        return;
+      }
       
       const response = await usageAPI.getGeminiInsights();
       console.log('Challenges API Response:', response.data);
@@ -455,13 +725,59 @@ export default function Dashboard() {
     }
   }, [user]);
 
-  // Function to refresh data
+  // Function to check if we can make Gemini API calls
+  const canMakeGeminiCall = () => {
+    const today = new Date().toDateString();
+    const storedDate = localStorage.getItem('geminiCallDate');
+    const storedCount = parseInt(localStorage.getItem('geminiCallCount') || '0');
+    
+    // Reset count if it's a new day
+    if (storedDate !== today) {
+      localStorage.setItem('geminiCallDate', today);
+      localStorage.setItem('geminiCallCount', '0');
+      setGeminiCallsToday(0);
+      return true;
+    }
+    
+    // Check if we're under the limit (leave some buffer, use 40 instead of 50)
+    if (storedCount >= 40) {
+      return false;
+    }
+    
+    // Check if enough time has passed since last call (minimum 2 minutes)
+    if (lastGeminiCallTime && Date.now() - lastGeminiCallTime < 120000) {
+      return false;
+    }
+    
+    return true;
+  };
+  
+  // Function to increment Gemini call count
+  const incrementGeminiCallCount = () => {
+    const newCount = geminiCallsToday + 1;
+    setGeminiCallsToday(newCount);
+    localStorage.setItem('geminiCallCount', newCount.toString());
+    setLastGeminiCallTime(Date.now());
+  };
+
+  // Function to refresh data with smart Gemini call management
   const handleRefresh = () => {
+    // Always fetch non-Gemini data
     fetchTodayUsage(true);
     fetchWeeklyData();
-    fetchProductivityData();
-    fetchFocusAnalysisData();
-    fetchChallenges();
+    
+    // Refresh ML prediction
+    fetchMLPrediction();
+    
+    // Only fetch Gemini data if we can make calls
+    if (canMakeGeminiCall()) {
+      // Stagger the Gemini calls to avoid hitting rate limits
+      setTimeout(() => fetchProductivityData(), 1000);
+      setTimeout(() => fetchFocusAnalysisData(), 3000);
+      setTimeout(() => fetchChallenges(), 5000);
+    } else {
+      console.log('Skipping Gemini API calls due to quota limits');
+    }
   };
 
   useEffect(() => {
@@ -469,14 +785,89 @@ export default function Dashboard() {
     return () => clearInterval(timer);
   }, []);
 
+  // Initialize Gemini call count from localStorage
   useEffect(() => {
-    console.log('Dashboard mounted, fetching usage data...');
-    fetchTodayUsage();
-    fetchWeeklyData();
-    fetchProductivityData();
-    fetchFocusAnalysisData();
-    fetchChallenges();
-  }, [user]); // Re-fetch when user changes
+    const today = new Date().toDateString();
+    const storedDate = localStorage.getItem('geminiCallDate');
+    const storedCount = parseInt(localStorage.getItem('geminiCallCount') || '0');
+    
+    if (storedDate === today) {
+      setGeminiCallsToday(storedCount);
+    } else {
+      localStorage.setItem('geminiCallDate', today);
+      localStorage.setItem('geminiCallCount', '0');
+      setGeminiCallsToday(0);
+    }
+  }, []);
+
+  // Batch fetch function to reduce simultaneous requests
+  const batchFetchData = useCallback(async () => {
+    console.log('Dashboard mounted, starting batched data fetch...');
+    
+    try {
+      // Phase 1: Essential data (parallel but limited)
+      console.log('Phase 1: Fetching essential usage data...');
+      await Promise.all([
+        fetchTodayUsage(),
+        fetchWeeklyData()
+      ]);
+      
+      // Small delay before next phase
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      // Phase 2: ML prediction and anomaly detection (independent of Gemini quota)
+      console.log('Phase 2: Fetching ML prediction and anomaly detection...');
+      fetchMLPrediction();
+      fetchAnomalyDetection();
+      
+      // Phase 3: Gemini-based insights (staggered if quota allows)
+      if (canMakeGeminiCall()) {
+        console.log('Phase 3: Fetching Gemini-based insights with delays...');
+        
+        // Stagger Gemini calls with longer delays to prevent rate limiting
+        setTimeout(() => {
+          if (canMakeGeminiCall()) {
+            fetchProductivityData();
+            incrementGeminiCallCount();
+          }
+        }, 3000);
+        
+        setTimeout(() => {
+          if (canMakeGeminiCall()) {
+            fetchFocusAnalysisData();
+            incrementGeminiCallCount();
+          }
+        }, 6000);
+        
+        setTimeout(() => {
+          if (canMakeGeminiCall()) {
+            fetchChallenges();
+            incrementGeminiCallCount();
+          }
+        }, 9000);
+      } else {
+        console.log('Skipping Gemini API calls - quota limit reached or too soon since last call');
+        // Use fallback data immediately
+        setProductivityData({});
+        setFocusAnalysisData(fallbackFocusAnalysisData);
+        setChallenges(fallbackChallenges);
+        setProductivityLoading(false);
+        setFocusAnalysisLoading(false);
+        setChallengesLoading(false);
+      }
+    } catch (error) {
+      console.error('Error in batch fetch:', error);
+    }
+  }, [fetchTodayUsage, fetchWeeklyData, fetchMLPrediction, fetchAnomalyDetection, fetchProductivityData, fetchFocusAnalysisData, fetchChallenges, canMakeGeminiCall, incrementGeminiCallCount]);
+
+  useEffect(() => {
+    // Debounce the batch fetch to prevent multiple rapid calls
+    const timeoutId = setTimeout(() => {
+      batchFetchData();
+    }, 500);
+
+    return () => clearTimeout(timeoutId);
+  }, []); // Only run once on mount
 
   const formatTime = (seconds) => {
     const hours = Math.floor(seconds / 3600);
@@ -589,8 +980,16 @@ export default function Dashboard() {
                   >
                     Test API
                   </button>
-                  <div className="text-2xl font-bold text-white">
-                    {formatTime(todayUsage.reduce((acc, app) => acc + app.duration, 0))}
+                  <div className="flex flex-col items-end">
+                    <div className="text-2xl font-bold text-white">
+                      {formatTime(todayUsage.reduce((acc, app) => acc + app.duration, 0))}
+                    </div>
+                    {screenTimeTrend && (
+                      <div className={`flex items-center text-sm ${screenTimeTrend.color} mt-1`}>
+                        <span className="mr-1">{screenTimeTrend.icon}</span>
+                        <span>{screenTimeTrend.message}</span>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -763,7 +1162,6 @@ export default function Dashboard() {
                 </div>
               ) : (
                 <>
-                  {console.log('Focus Analysis Data for Chart:', focusAnalysisData)}
                   <ResponsiveContainer width="100%" height={300}>
                     <BarChart data={focusAnalysisData}>
                       <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
@@ -788,10 +1186,81 @@ export default function Dashboard() {
 
         {activeTab === 'insights' && (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-            {/* AI Challenges */}
+            {/* ML Behavior Prediction */}
             <div className="bg-gray-800/80 backdrop-blur-md rounded-2xl p-6 border border-gray-700">
               <h2 className="text-xl font-bold text-white mb-6 flex items-center">
                 <Brain className="w-5 h-5 mr-2" />
+                AI Behavior Analysis
+                {mlLoading && (
+                  <div className="ml-2 w-4 h-4 border-2 border-purple-500/30 border-t-purple-500 rounded-full animate-spin"></div>
+                )}
+              </h2>
+              
+              {mlLoading ? (
+                <div className="flex items-center justify-center py-8">
+                  <div className="w-8 h-8 border-2 border-purple-500/30 border-t-purple-500 rounded-full animate-spin"></div>
+                  <span className="ml-3 text-gray-300">Analyzing your behavior pattern...</span>
+                </div>
+              ) : mlError ? (
+                <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-lg">
+                  <p className="text-red-400 text-sm">{mlError}</p>
+                </div>
+              ) : mlPrediction ? (
+                <div className="space-y-4">
+                  <div className="p-4 bg-gradient-to-r from-blue-500/10 to-purple-500/10 rounded-xl border border-blue-500/20">
+                    <div className="flex items-center justify-between mb-3">
+                      <h3 className="text-white font-semibold">Predicted Behavior Class</h3>
+                      <div className="text-2xl font-bold text-blue-400">
+                        {mlPrediction.prediction?.predicted_class}
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-gray-300">Confidence Level</span>
+                      <span className="text-green-400 font-medium">
+                        {(mlPrediction.prediction?.confidence * 100).toFixed(1)}%
+                      </span>
+                    </div>
+                  </div>
+                  
+                  {mlPrediction.dataUsed && (
+                    <div className="p-3 bg-gray-700/50 rounded-lg">
+                      <h4 className="text-white text-sm font-medium mb-2">Analysis Based On:</h4>
+                      <div className="grid grid-cols-2 gap-2 text-xs">
+                        <div className="text-gray-300">
+                          Days Analyzed: <span className="text-white">{mlPrediction.dataUsed.daysAnalyzed}</span>
+                        </div>
+                        <div className="text-gray-300">
+                          Avg Screen Time: <span className="text-white">{mlPrediction.dataUsed.avgScreenTimeHours}h</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  
+                  <button
+                    onClick={fetchMLPrediction}
+                    className="w-full px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors duration-200 text-sm"
+                  >
+                    Refresh Analysis
+                  </button>
+                </div>
+              ) : (
+                <div className="text-center py-8">
+                  <Brain className="w-12 h-12 text-gray-500 mx-auto mb-3" />
+                  <p className="text-gray-400">No behavior analysis available</p>
+                  <button
+                    onClick={fetchMLPrediction}
+                    className="mt-3 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors duration-200 text-sm"
+                  >
+                    Analyze My Behavior
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* AI Challenges */}
+            <div className="bg-gray-800/80 backdrop-blur-md rounded-2xl p-6 border border-gray-700">
+              <h2 className="text-xl font-bold text-white mb-6 flex items-center">
+                <Target className="w-5 h-5 mr-2" />
                 Personalized Challenges
                 {challengesLoading && (
                   <div className="ml-2 w-4 h-4 border-2 border-purple-500/30 border-t-purple-500 rounded-full animate-spin"></div>
@@ -846,12 +1315,99 @@ export default function Dashboard() {
                     <h3 className="text-white font-semibold">Better Sleep</h3>
                   </div>
                   <p className="text-gray-300 text-sm">Avoid screens 1 hour before bedtime for better sleep quality.</p>
-                        </div>
                 </div>
+              </div>
             </div>
-        </div>
+
+            {/* Anomaly Detection */}
+            <div className="bg-gray-800/80 backdrop-blur-md rounded-2xl p-6 border border-gray-700">
+              <h2 className="text-xl font-bold text-white mb-6 flex items-center">
+                <AlertTriangle className="w-5 h-5 mr-2" />
+                Usage Anomaly Detection
+                {anomalyLoading && (
+                  <div className="ml-2 w-4 h-4 border-2 border-orange-500/30 border-t-orange-500 rounded-full animate-spin"></div>
+                )}
+              </h2>
+              
+              {anomalyLoading ? (
+                <div className="flex items-center justify-center py-8">
+                  <div className="w-8 h-8 border-2 border-orange-500/30 border-t-orange-500 rounded-full animate-spin"></div>
+                  <span className="ml-3 text-gray-300">Analyzing usage patterns...</span>
+                </div>
+              ) : anomalyError ? (
+                <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-lg">
+                  <p className="text-red-400 text-sm">{anomalyError}</p>
+                </div>
+              ) : anomalies && anomalies.length > 0 ? (
+                <div className="space-y-4">
+                  <div className="p-4 bg-gradient-to-r from-orange-500/10 to-red-500/10 rounded-xl border border-orange-500/20">
+                    <div className="flex items-center justify-between mb-3">
+                      <h3 className="text-white font-semibold">Unusual Usage Detected</h3>
+                      <div className="text-2xl font-bold text-orange-400">
+                        {anomalies.length}
+                      </div>
+                    </div>
+                    <p className="text-gray-300 text-sm mb-4">
+                      Found {anomalies.length} anomalous usage pattern{anomalies.length > 1 ? 's' : ''} in the last 7 days
+                    </p>
+                  </div>
+                  
+                  <div className="space-y-2 max-h-48 overflow-y-auto">
+                    {anomalies.map((anomaly, index) => (
+                      <div key={index} className="p-3 bg-gray-700/50 rounded-lg border-l-4 border-orange-500">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <div className="text-white font-medium text-sm">
+                              {new Date(anomaly.date).toLocaleDateString('en-US', { 
+                                weekday: 'short', 
+                                month: 'short', 
+                                day: 'numeric' 
+                              })}
+                            </div>
+                            <div className="text-gray-300 text-xs">
+                              {anomaly.duration_hours}h screen time
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <div className={`text-xs px-2 py-1 rounded ${
+                              anomaly.severity === 'high' 
+                                ? 'bg-red-500/20 text-red-400' 
+                                : 'bg-orange-500/20 text-orange-400'
+                            }`}>
+                              {anomaly.severity}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  
+                  <button
+                    onClick={fetchAnomalyDetection}
+                    className="w-full px-4 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-lg transition-colors duration-200 text-sm"
+                  >
+                    Refresh Analysis
+                  </button>
+                </div>
+              ) : (
+                <div className="text-center py-8">
+                  <AlertTriangle className="w-12 h-12 text-gray-500 mx-auto mb-3" />
+                  <p className="text-gray-400 mb-2">No anomalies detected</p>
+                  <p className="text-gray-500 text-sm">Your usage patterns look normal for the last 7 days</p>
+                  <button
+                    onClick={fetchAnomalyDetection}
+                    className="mt-3 px-4 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-lg transition-colors duration-200 text-sm"
+                  >
+                    Check Again
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
         )}
       </div>
+      {/* Floating Chatbot Overlay */}
+      <ChatbotOverlay />
     </div>
   );
 }
